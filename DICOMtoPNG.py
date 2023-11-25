@@ -4,23 +4,23 @@
 import csv
 hem_list = []
 met_list = []
-with open("filename_hemangioma.txt") as f: # filename_hemangioma.txtには、.dcmのファイル名のリストがある
+with open("filename_hemangioma.txt") as f:
     reader = csv.reader(f)
     for row in reader:
         hem_list.append("./hemangioma/" + row[0])
-with open("filename_metastasis.txt") as f: # filename_metastasis.txtには、.dcmのファイル名のリストがある
+with open("filename_metastasis.txt") as f:
     reader = csv.reader(f)
     for row in reader:
         met_list.append("./metastasis/" + row[0])
 
-
 n_hem = len(hem_list)
 n_met = len(met_list)
-# n_hem, n_met # 画像数は50枚ずつ
 
 import pydicom
 import cv2
 import numpy as np
+
+img_size = 128 # 出力サイズを規定
 
 # hemangioma画像を取得
 i = 0
@@ -48,9 +48,11 @@ while i < n_hem:
     min_ = wc - ww/2
     img = 255 * (img - min_) / (max_ - min_)
     img = np.clip(img, 0, 255)
+    
+    img = cv2.resize(img, (img_size, img_size)) # ダウンサイジング：526x526 -> 128x128
 
-    cv2.imwrite("./hemangioma_png/hemangioma_{}.png".format(i), img) # png形式で保存
-  
+    cv2.imwrite("./hemangioma_png_{}/hemangioma_{}.png".format(img_size, i), img) # png形式で保存
+    # cv2.imwrite("./hemangioma_png/hemangioma_{}.png".format(i), img) # png形式で保存
     i += 1
 
 # metastasis画像を取得
@@ -79,7 +81,10 @@ while i < n_met:
     min_ = wc - ww/2
     img = 255 * (img - min_) / (max_ - min_)
     img = np.clip(img, 0, 255)
+
+    img = cv2.resize(img, (img_size, img_size)) # ダウンサイジング：526x526 -> 128x128
     
-    cv2.imwrite("./metastasis_png/metastasis_{}.png".format(i), img)  # png形式で保存
+    cv2.imwrite("./metastasis_png_{}/metastasis_{}.png".format(img_size, i), img)  # png形式で保存
+    # cv2.imwrite("./metastasis_png/metastasis_{}.png".format(i), img)  # png形式で保存
     
     i += 1
