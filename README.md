@@ -1,2 +1,2 @@
 # GenerativeAI_for_Abdominal_CT_img
-GAN, diffusion modelを用いて肝臓腫瘍の画像を生成する
+GAN, diffusion modelを用いて腹部CT画像を生成する
