@@ -1,10 +1,3 @@
-### DCGAN
-# GoogleDriveで実行
-from google.colab import drive
-drive.mount('/content/drive')
-
-path = "/content/drive/MyDrive/Colab Notebooks/GenerativeAI/"
-
 # パッケージのimport
 import random
 import math
@@ -12,7 +5,8 @@ import time
 import pandas as pd
 import numpy as np
 from PIL import Image
-
+import os
+import glob
 import torch
 import torch.utils.data as data
 import torch.nn as nn
@@ -20,20 +14,28 @@ import torch.nn.functional as F
 import torch.optim as optim
 
 from torchvision import transforms
-
 import matplotlib.pyplot as plt
-%matplotlib inline
-
 
 # Setup seeds
-torch.manual_seed(1234)
-np.random.seed(1234)
-random.seed(1234)
+torch.manual_seed(42)
+np.random.seed(42)
+random.seed(42)
 
-# Generatorを実装
+z_dim = 40 # カーネルのチャネル数はここで
+dropout_ratio = 0.7 # ドロップアウト
+num_try = 0.0 # 試行回数
+path = "DCGAN"
+save_path = path + "/DCGAN_hem_wl40_ww400" # 保存先ファイルを指定
+if not os.path.isdir(save_path):
+    os.mkdir(save_path)
+    os.mkdir(save_path + "/product")
+    os.mkdir(save_path + "/model")
+    os.mkdir(save_path + "/loss")
+
+# Generator
 class Generator(nn.Module):
 
-    def __init__(self, z_dim=20, image_size=128):
+    def __init__(self, z_dim=z_dim, image_size=64):
         super(Generator, self).__init__()
 
         self.layer1 = nn.Sequential(
@@ -61,8 +63,8 @@ class Generator(nn.Module):
             nn.ReLU(inplace=True))
 
         self.last = nn.Sequential(
-            nn.ConvTranspose2d(image_size, 1, kernel_size=6,
-                               stride=4, padding=1),
+            nn.ConvTranspose2d(image_size, 1, kernel_size=4,
+                               stride=2, padding=1),
             nn.Tanh())
         # 注意：白黒画像なので出力チャネルは1つだけ
 
@@ -74,20 +76,18 @@ class Generator(nn.Module):
         out = self.last(out)
 
         return out
-      
-G = Generator(z_dim=20, image_size=128)
 
-# Discriminatorを実装
+# Discriminator
 class Discriminator(nn.Module):
 
-    def __init__(self, z_dim=20, image_size=128):
+    def __init__(self, z_dim=z_dim, image_size=64):
         super(Discriminator, self).__init__()
 
         self.layer1 = nn.Sequential(
-            nn.Conv2d(1, image_size, kernel_size=6,
-                      stride=4, padding=1),
+            nn.Conv2d(1, image_size, kernel_size=4,
+                      stride=2, padding=1),
             nn.LeakyReLU(0.1, inplace=True),
-            nn.Dropout(p=0.7))
+            nn.Dropout(p=dropout_ratio))
 
         # 注意：白黒画像なので入力チャネルは1つだけ
 
@@ -95,19 +95,19 @@ class Discriminator(nn.Module):
             nn.Conv2d(image_size, image_size*2, kernel_size=4,
                       stride=2, padding=1),
             nn.LeakyReLU(0.1, inplace=True),
-            nn.Dropout(p=0.7))
+            nn.Dropout(p=dropout_ratio))
 
         self.layer3 = nn.Sequential(
             nn.Conv2d(image_size*2, image_size*4, kernel_size=4,
                       stride=2, padding=1),
             nn.LeakyReLU(0.1, inplace=True),
-            nn.Dropout(p=0.7))
+            nn.Dropout(p=dropout_ratio))
 
         self.layer4 = nn.Sequential(
             nn.Conv2d(image_size*4, image_size*8, kernel_size=4,
                       stride=2, padding=1),
             nn.LeakyReLU(0.1, inplace=True),
-            nn.Dropout(p=0.7))
+            nn.Dropout(p=dropout_ratio))
 
         self.last = nn.Conv2d(image_size*8, 1, kernel_size=4, stride=1)
 
@@ -120,20 +120,14 @@ class Discriminator(nn.Module):
 
         return out
 
-D = Discriminator(z_dim=20, image_size=128)
+G = Generator(z_dim=z_dim, image_size=64)
+D = Discriminator(z_dim=z_dim, image_size=64)
 
-# Dataloaderの実装
+# Dataloader
 def make_datapath_list():
     """学習、検証の画像データとアノテーションデータへのファイルパスリストを作成する。 """
 
-    train_img_list = list()  # 画像ファイルパスを格納
-
-    for img_idx in range(50):
-        img_path = path + "data/hemangioma_png_128/hemangioma_" + str(img_idx)+'.png'
-        train_img_list.append(img_path)
-
-        img_path = path + "data/metastasis_png_128/metastasis_" + str(img_idx)+'.png'
-        train_img_list.append(img_path)
+    train_img_list = glob.glob("data/hemangioma_wl40_ww400_64x64_8bit_grey/*.png")  # 画像ファイルパスを格納
 
     return train_img_list
 
@@ -142,6 +136,9 @@ class ImageTransform():
 
     def __init__(self, mean, std):
         self.data_transform = transforms.Compose([
+            transforms.RandomHorizontalFlip(p=0.5),
+            # transforms.RandomRotation(degrees=(-90, 90)),
+            transforms.RandomVerticalFlip(p=0.5),
             transforms.ToTensor(),
             transforms.Normalize(mean, std)
         ])
@@ -171,7 +168,7 @@ class GAN_Img_Dataset(data.Dataset):
 
         return img_transformed
 
-# DataLoaderの作成と動作確認
+# DataLoaderの作成
 
 # ファイルリストを作成
 train_img_list=make_datapath_list()
@@ -187,14 +184,8 @@ batch_size = 16
 
 train_dataloader = torch.utils.data.DataLoader(
     train_dataset, batch_size=batch_size, shuffle=True)
-"""
-# 動作の確認
-batch_iterator = iter(train_dataloader)  # イテレータに変換
-imges = next(batch_iterator)  # 1番目の要素を取り出す
-print(imges.size())  # torch.Size([64, 1, 128, 128])
-"""
 
-# 学習
+
 # ネットワークの初期化
 def weights_init(m):
     classname = m.__class__.__name__
@@ -214,27 +205,6 @@ D.apply(weights_init)
 
 print("ネットワークの初期化完了")
 
-# EarlyStoppingを実装
-class EarlyStopping():
-  def __init__(self, patience=0, verbose=0):
-    self._step = 0
-    self._loss = float('inf')
-    self._patience = patience
-    self.verbose = verbose
-
-  def validate(self, loss):
-    if self._loss < loss:
-      self._step += 1
-      if self._step > self._patience:
-        if self.verbose:
-          print('early stopping')
-        return True
-    else:
-      self._step = 0
-      self._loss = loss
-
-    return False
-
 # モデルを学習させる関数を作成
 
 
@@ -249,18 +219,17 @@ def train_model(G, D, dataloader, num_epochs):
     beta1, beta2 = 0.0, 0.9
     g_optimizer = torch.optim.Adam(G.parameters(), g_lr, [beta1, beta2])
     d_optimizer = torch.optim.Adam(D.parameters(), d_lr, [beta1, beta2])
+    # g_optimizer = torch.optim.RMSprop(G.parameters(), g_lr)
+    # d_optimizer = torch.optim.RMSprop(D.parameters(), d_lr)
 
     # 誤差関数を定義
     criterion = nn.BCEWithLogitsLoss(reduction='mean')
 
     # パラメータをハードコーディング
-    z_dim = 20
+    # z_dim = 20
     mini_batch_size = 128
-    """
-    # EarlyStoppingを定義
-    g_early_stopping = EarlyStopping(patience=100, verbose=1)
-    # d_early_stopping = EarlyStopping(patience=30, verbose=1)
-    """
+
+
     # ネットワークをGPUへ
     G.to(device)
     D.to(device)
@@ -382,61 +351,50 @@ def train_model(G, D, dataloader, num_epochs):
         d_loss_list.append(epoch_d_loss/batch_size)
         g_loss_list.append(epoch_g_loss/batch_size)
 
-        """
-        # if g_early_stopping.validate(np.mean(epoch_g_loss)) and d_early_stopping.validate(np.mean(epoch_d_loss)):
-        if g_early_stopping.validate(np.mean(epoch_g_loss)):
-          break # "early stopping"が2つprintされて終了
-        """
+        # 1000epochごとにモデル、画像を保存
+        # if epoch % 1000 == 999:
+        if epoch % 10 == 9:
+            # モデルの保存
+            save_path_G = save_path + f"model/G_{num_try}_{epoch}.cpt"
+            save_path_D = save_path + f"model/D_{num_try}_{epoch}.cpt"
+            torch.save({'epoch': epoch,
+                      'model_state_dict': G.state_dict(),
+                      'optimizer_state_dict': g_optimizer.state_dict(),
+                      'loss': g_loss_list,},
+                       save_path_G)
+            torch.save({'epoch': epoch,
+                      'model_state_dict': D.state_dict(),
+                      'optimizer_state_dict': d_optimizer.state_dict(),
+                      'loss': d_loss_list,},
+                       save_path_D)
+            
+            #　画像の保存
+            fixed_z = torch.randn(batch_size, z_dim)
+            fixed_z = fixed_z.view(fixed_z.size(0), fixed_z.size(1), 1, 1)
+            output = G(fixed_z.to(device))
+            
+            fig = plt.figure(figsize=(30, 3))
+            for i in range(0, 10):
+                plt.subplot(1, 10, i)
+                plt.imshow(output[i][0].cpu().detach().numpy(), 'gray')
+            plt.savefig(save_path + f"/product/hemangioma_{num_try}_{epoch}.png")
+            
+            # torch.save(G, save_path + "model/G_{}_{}.pth".format(num_try, epoch))
 
+            
+            
     return G, D, d_loss_list, g_loss_list
 
 # 学習・検証を実行する
-num_epochs = 1000
+num_epochs = 100
 G_update, D_update, d_loss_list, g_loss_list = train_model(
     G, D, dataloader=train_dataloader, num_epochs=num_epochs)
 
 # Tensorboard的なlossのプロット
-num_try = 1 # やり直したらここを変更する
 
 x = np.arange(1, num_epochs+1)
 plt.plot(x, d_loss_list, color="grey", label="D")
 plt.plot(x, g_loss_list, color="black", label="G")
 plt.legend()
-plt.savefig(path + "DCGAN/loss/loss_{}.png".format(num_try))
+plt.savefig(save_path + "loss/loss_{}.png".format(num_try))
 
-# モデルの保存
-torch.save(G_update, path+"DCGAN/model/G_{}.pth".format(num_try))
-torch.save(D_update, path+"DCGAN/model/D_{}.pth".format(num_try))
-
-# 生成画像と訓練データを可視化する
-# 本セルは良い感じの画像が生成されるまで、何度も実行し直しています。
-
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
-# 入力の乱数生成
-batch_size = 8
-z_dim = 20
-fixed_z = torch.randn(batch_size, z_dim)
-fixed_z = fixed_z.view(fixed_z.size(0), fixed_z.size(1), 1, 1)
-
-# 画像生成
-G_update.eval()
-fake_images = G_update(fixed_z.to(device))
-
-# 訓練データ
-batch_iterator = iter(train_dataloader)  # イテレータに変換
-imges = next(batch_iterator)  # 1番目の要素を取り出す
-
-
-# 出力
-fig = plt.figure(figsize=(15, 6))
-for i in range(0, 5):
-    # 上段に訓練データを
-    plt.subplot(2, 5, i+1)
-    plt.imshow(imges[i][0].cpu().detach().numpy(), 'gray')
-
-    # 下段に生成データを表示する
-    plt.subplot(2, 5, 5+i+1)
-    plt.imshow(fake_images[i][0].cpu().detach().numpy(), 'gray')
-
-plt.savefig(path+"DCGAN/product/product_{}.png".format(num_try)) # productの保存
