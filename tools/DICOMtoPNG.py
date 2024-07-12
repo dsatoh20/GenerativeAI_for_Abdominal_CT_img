@@ -1,90 +1,101 @@
-### DICOM画像をPNG画像に変換する
-
-# filepathを取得する
-import csv
-hem_list = []
-met_list = []
-with open("filename_hemangioma.txt") as f:
-    reader = csv.reader(f)
-    for row in reader:
-        hem_list.append("./hemangioma/" + row[0])
-with open("filename_metastasis.txt") as f:
-    reader = csv.reader(f)
-    for row in reader:
-        met_list.append("./metastasis/" + row[0])
-
-n_hem = len(hem_list)
-n_met = len(met_list)
-
-import pydicom
 import cv2
 import numpy as np
+import pydicom
+import glob
+import os
+import pandas as pd
 
-img_size = 128 # 出力サイズを規定
 
-# hemangioma画像を取得
-i = 0
-while i < n_hem:
-    
-    # ウインドニング処理
-    
-    ds = pydicom.dcmread(hem_list[i])
-    wc = ds.WindowCenter
-    try:
-        wc = wc[0] # ウインドウ幅が2種類ある画像について
-    except:
-        pass
-    ww = ds.WindowWidth
-    try:
-        ww = ww[0] # ウインドウ幅が2種類ある画像について
-    except:
-        pass
+# Normalize dicom image
+def norm_dicom(filepath, wl=40, ww=400):
+
+    ds = pydicom.dcmread(filepath) # Signed 16bit、monochrome、512x512px
+    # print("グレースケール?:", ds.PhotometricInterpretation,"符号の有無とビット深度:", ds.PixelRepresentation, ds.BitsAllocated)
+
+    # Set a window scale
+    upper_limit = wl + ww/2
+    lower_limit = wl - ww/2
+
+    # pixel value to CT one
     ri = ds.RescaleIntercept
     rs = ds.RescaleSlope
-    img = ds.pixel_array
-    
-    img = img * rs + ri # 画素値をCT値に変換
-    max_ = wc + ww/2
-    min_ = wc - ww/2
-    img = 255 * (img - min_) / (max_ - min_)
+    img = ds.pixel_array # dicom to ndarray
+    img = img * rs + ri 
+
+    # Convert the values to 8-bit
+    img = 255 * (img - lower_limit) / (upper_limit - lower_limit)
     img = np.clip(img, 0, 255)
+    img = img.astype(np.uint8)
     
-    img = cv2.resize(img, (img_size, img_size)) # ダウンサイジング：526x526 -> 128x128
+    return img
+    
+# Crop parts of tumors
+def crop(filepath, img, loc): # filepath, img: ndarray, loc: dataframe
+    id = int(filepath.split('/')[-1].replace(".dcm", ""))
+    row = loc[loc.id == id]
+    row = row.values.tolist()
+    upper_left_x, upper_left_y, lower_right_x, lower_right_y = row[0][1], row[0][2], row[0][3], row[0][4]
+    delta_x = abs(lower_right_x - upper_left_x)
+    delta_y = abs(lower_right_y - upper_left_y)
+    if delta_x >= delta_y:
+        img_cropped = img[upper_left_y:upper_left_y+delta_x, upper_left_x:lower_right_x]
+    else:
+        img_cropped = img[upper_left_y:lower_right_y, upper_left_x:upper_left_x+delta_y]
+        
+    return img_cropped
 
-    cv2.imwrite("./hemangioma_png_{}/hemangioma_{}.png".format(img_size, i), img) # png形式で保存
-    # cv2.imwrite("./hemangioma_png/hemangioma_{}.png".format(i), img) # png形式で保存
-    i += 1
+# Resize
+def resize(img):
+    img = cv2.resize(img, (64, 64))
+    return img
 
-# metastasis画像を取得
-i = 0
-while i < n_met:
-    
-    # ウインドニング処理
-    
-    ds = pydicom.dcmread(hem_list[i])
-    wc = ds.WindowCenter
-    try:
-        wc = wc[0] # ウインドウ幅が2種類ある画像について
-    except:
-        pass
-    ww = ds.WindowWidth
-    try:
-        ww = ww[0] # ウインドウ幅が2種類ある画像について
-    except:
-        pass
-    ri = ds.RescaleIntercept
-    rs = ds.RescaleSlope
-    img = ds.pixel_array
-    
-    img = img * rs + ri # 画素値をCT値に変換
-    max_ = wc + ww/2
-    min_ = wc - ww/2
-    img = 255 * (img - min_) / (max_ - min_)
-    img = np.clip(img, 0, 255)
 
-    img = cv2.resize(img, (img_size, img_size)) # ダウンサイジング：526x526 -> 128x128
+# Save outputs as png
+def save(filepath, tumor, img, wl=40, ww=400):
+    # make a directory to save outputs
+    save_dir = f"data/{tumor}_wl{wl}_ww{ww}_64x64_8bit_grey"
+    if not os.path.isdir(save_dir):
+        os.mkdir(save_dir)
+
+    cv2.imwrite(save_dir + f'/{filepath.split("/")[-1].replace(".dcm", "")}.png', img)
     
-    cv2.imwrite("./metastasis_png_{}/metastasis_{}.png".format(img_size, i), img)  # png形式で保存
-    # cv2.imwrite("./metastasis_png/metastasis_{}.png".format(i), img)  # png形式で保存
+if __name__ == "__main__":
+    # Get filepaths
+    tumor = input("type 'hemangioma' or 'metastasis': ")
+    if tumor == 'hemangioma':
+        tumor_index = 0
+    else:
+        tumor_index = 1
+    dcm_files = glob.glob(f"data/{tumor}/*dcm") # dcm
+
+    n_dcm = len(dcm_files)
+
+    hemloc_path = 'data/hemangioma_loc.csv'
+    metloc_path = 'data/metastasis_loc.csv'
+
+    hemangioma_loc = pd.read_csv(hemloc_path)
+    metastasis_loc = pd.read_csv(metloc_path)
+    locs = [hemangioma_loc, metastasis_loc]
     
-    i += 1
+    # Set WindowLevel and WindowWidth
+    wl, ww = int(input("Window Level: ")), int(input("Window Width: "))
+    
+    i = 0
+    while i < n_dcm:
+        
+        filepath = dcm_files[i]
+        # normalize
+        np_img = norm_dicom(filepath=filepath, wl=wl, ww=ww)
+        # crop
+        np_cropped_img = crop(filepath=filepath, img=np_img, loc=locs[tumor_index])
+        # resize
+        np_resized_cropped_img = resize(np_cropped_img)
+        # save
+        save(filepath=filepath, tumor=tumor, img=np_resized_cropped_img, wl=wl, ww=ww)
+        
+        i += 1
+        
+
+# cv2.imwrite("hemangioma_sample_wl40_ww400_64x64_8bit_grey.png", img_cropped)
+# cv2.imwrite("hemangioma_sample_wl60_ww400_64x64_8bit_grey.png", img_cropped)
+# cv2.imwrite("hemangioma_sample_wl40_ww250_64x64_8bit_grey.png", img_cropped)
